@@ -40,6 +40,11 @@ async function openMember(view, ctx, member) {
       ['历史券响应率', fmtPct(detail.purchase_rate)],
       ['平均客单价', fmtMoney(detail.avg_ticket)],
       ['入会日期', esc(detail.joined_on)],
+      ...(detail.is_master === false
+        ? [['归并状态', `<span class="badge warn">已归并至主档 ${esc(detail.master_member?.member_no || '')}</span>`]]
+        : detail.merged_count
+          ? [['归并状态', `<span class="badge ok">主档 · 吸收 ${fmtNum(detail.merged_count)} 份被合并档案</span>`]]
+          : [['归并状态', '<span class="muted">独立主档（无被合并档案）</span>']]),
     ])}
     <h3 style="margin:14px 0 8px;font-size:0.95rem">订单（最近 ${orders.length} / 共 ${fmtNum(detail.orders_total)} 笔）</h3>
     ${
@@ -118,7 +123,8 @@ export const membersPage = {
             {
               key: 'member_no',
               label: '会员',
-              render: (row) => `<b>${esc(row.name)}</b><div class="mono muted">${esc(row.member_no)} · ${esc(row.phone)}</div>`,
+              render: (row) => `<b>${esc(row.name)}</b><div class="mono muted">${esc(row.member_no)} · ${esc(row.phone)}</div>
+                ${row.is_master === false ? '<span class="badge warn" style="margin-top:2px">已归并</span>' : '<span class="badge ok" style="margin-top:2px">主档</span>'}`,
             },
             { key: 'tier_label', label: '卡等级' },
             {
@@ -135,6 +141,7 @@ export const membersPage = {
           ],
           empty: { title: '没有匹配的会员', hint: '换个分群或清空搜索词再试。' },
         })}
+        <div class="note" style="margin-top:10px">默认仅展示归并后的会员主档（去重、避免重复触达）；在会员详情可查看其吸收的被合并档案。</div>
       </section>`;
 
     const filters = view.querySelector('#member-filters');

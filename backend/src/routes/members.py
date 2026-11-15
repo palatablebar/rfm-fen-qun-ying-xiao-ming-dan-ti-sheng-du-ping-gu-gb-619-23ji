@@ -17,6 +17,7 @@ def list_members(
     segment: str | None = Query(default=None, max_length=20),
     tier: str | None = Query(default=None, max_length=12),
     min_amount: float | None = Query(default=None, ge=0),
+    include_merged: bool = Query(default=False),
     limit: int = Query(20),
     offset: int = Query(0),
     db: Session = Depends(get_db),
@@ -30,6 +31,7 @@ def list_members(
         segment=segment,
         tier=tier,
         min_amount=min_amount,
+        include_merged=include_merged,
         limit=page.limit,
         offset=page.offset,
     )

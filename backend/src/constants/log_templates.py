@@ -13,5 +13,9 @@ ACTIONS: dict[str, str] = {
     "export.members": "导出会员名单",
     "export.segments": "导出分群表",
     "export.audiences": "导出名单明细",
+    "export.merge": "导出归并结果",
+    "merge.start": "发起跨渠道归并",
+    "merge.retry": "续跑归并任务",
+    "merge.complete": "归并任务完成",
     "http.mutation": "写请求",
 }

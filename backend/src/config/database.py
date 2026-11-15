@@ -10,14 +10,25 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.config.settings import settings
 
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,
-    pool_size=8,
-    max_overflow=16,
-    pool_recycle=1800,
-    future=True,
-)
+from src.config.settings import settings
+
+if settings.db_kind == "sqlite":
+    # 本地/CI 测试用 SQLite：连接池参数仅对 PG/MySQL 有效
+    engine = create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        future=True,
+    )
+else:
+    engine = create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=8,
+        max_overflow=16,
+        pool_recycle=1800,
+        future=True,
+    )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
 

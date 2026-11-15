@@ -41,6 +41,8 @@ def serialize_member(member: Member, *, mask: bool) -> dict:
         "segment_label": SEGMENT_LABELS.get(member.segment_code or "", None),
         "purchase_rate": round(member.purchase_rate or 0.0, 6),
         "avg_ticket": round(member.avg_ticket or 0.0, 2),
+        "merged_into_id": member.merged_into_id,
+        "is_master": member.merged_into_id is None,
     }
 
 
@@ -66,12 +68,17 @@ def list_members(
     segment: str | None = None,
     tier: str | None = None,
     min_amount: float | None = None,
+    include_merged: bool = False,
     limit: int = 20,
     offset: int = 0,
     mask: bool = False,
 ) -> dict:
     stmt = select(Member)
     count_stmt = select(func.count()).select_from(Member)
+    # 默认只看归并后的主档，避免重复触达；include_merged 才带出被合并档案
+    if not include_merged:
+        stmt = stmt.where(Member.merged_into_id.is_(None))
+        count_stmt = count_stmt.where(Member.merged_into_id.is_(None))
     if q:
         like = f"%{q.strip()}%"
         condition = Member.member_no.ilike(like) | Member.name.ilike(like) | Member.phone.ilike(like)
@@ -109,6 +116,13 @@ def get_member(db: Session, member_id: int, *, mask: bool) -> dict:
     payload["orders"] = [serialize_order(order, member.member_no) for order in orders]
     payload["orders_total"] = db.scalar(
         select(func.count()).select_from(Order).where(Order.member_id == member_id)
+    ) or 0
+    # 归并信息：被合并档案指向其主档，主档列出被它吸收的档案数
+    if member.merged_into_id is not None:
+        master = db.get(Member, member.merged_into_id)
+        payload["master_member"] = serialize_member(master, mask=mask) if master else None
+    payload["merged_count"] = db.scalar(
+        select(func.count()).select_from(Member).where(Member.merged_into_id == member_id)
     ) or 0
     return payload
 

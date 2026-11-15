@@ -29,7 +29,8 @@ export const NAV = [
   { to: '#/members', no: '02', label: '会员与订单', permission: 'member:read' },
   { to: '#/segments', no: '03', label: 'RFM 分群', permission: 'segment:read' },
   { to: '#/audiences', no: '04', label: '名单与提升度', permission: 'audience:read' },
-  { to: '#/exports', no: '05', label: '导出与审计', permission: 'member:read' },
+  { to: '#/merge', no: '05', label: '跨渠道归并', permission: 'merge:read' },
+  { to: '#/exports', no: '06', label: '导出与审计', permission: 'member:read' },
 ];
 
 export const ROLE_LABELS = {
@@ -42,13 +43,14 @@ export const PERMISSIONS = {
   admin: [
     'overview:read', 'member:read', 'order:read', 'segment:read', 'segment:recompute', 'segment:write',
     'campaign:read', 'campaign:write', 'audience:read', 'audience:generate', 'audience:confirm',
+    'merge:read', 'merge:run',
     'export:read', 'audit:read',
   ],
   analyst: [
     'overview:read', 'member:read', 'order:read', 'segment:read', 'campaign:read',
-    'audience:read', 'audience:confirm', 'export:read',
+    'audience:read', 'audience:confirm', 'merge:read', 'merge:run', 'export:read',
   ],
-  viewer: ['overview:read', 'member:read', 'order:read', 'segment:read', 'campaign:read', 'audience:read'],
+  viewer: ['overview:read', 'member:read', 'order:read', 'segment:read', 'campaign:read', 'audience:read', 'merge:read'],
 };
 
 export const ENUMS = {
@@ -101,6 +103,32 @@ export const ENUMS = {
     deferred: '预算不足',
     ineligible: 'lift≤1 不投',
   },
+  profileChannel: {
+    store: '门店收银',
+    miniapp: '小程序',
+    delivery: '外卖平台',
+  },
+  profileStatus: {
+    active: '有效',
+    merged: '已归并',
+  },
+  mergeJobStatus: {
+    pending: '待处理',
+    running: '处理中',
+    completed: '已完成',
+    failed: '失败待续跑',
+  },
+  matchKind: {
+    phone: '手机号一致',
+    external: '外部账号一致',
+  },
+  conflictField: {
+    name: '姓名',
+    city: '城市',
+    tier: '会员等级',
+    phone: '手机号',
+    external_id: '外部账号',
+  },
   windowDays: [
     { value: 90, label: '近 90 天' },
     { value: 180, label: '近 180 天' },
@@ -128,6 +156,15 @@ export function segmentTone(code) {
 
 export function audienceTone(status) {
   return { pending: 'pending warn', confirmed: 'ok', pushed: 'info' }[status] || 'info';
+}
+
+export function mergeJobTone(status) {
+  return {
+    pending: 'pending warn',
+    running: 'info',
+    completed: 'ok',
+    failed: 'danger',
+  }[status] || 'info';
 }
 
 export function liftTone(lift) {

@@ -34,7 +34,7 @@
 密码统一：`Demo@2026`。低权角色调用高权接口返回 **真实 HTTP 403**（`src/middlewares/rbac.py`，不靠前端隐藏）。
 未登录 401（`AUTH_MISSING`）、参数非法 422（`VALIDATION`）、重复自然键 409（`CONFLICT`）。
 
-## 3. 业务模块表（6 个）
+## 3. 业务模块表（7 个）
 
 | # | 模块 | 对应页面 | 主要 services / controller | 主要 API |
 |---|---|---|---|---|
@@ -43,10 +43,26 @@
 | ③ | 分群规则与券口径 | RFM 分群 `#/segments` | `segment_service` / `segment_controller` | `PATCH /api/segments/{id}` |
 | ④ | 名单生成（算法 B 落库） | 名单与提升度 `#/audiences` | `audience_service` / `audience_controller` | `POST /api/audiences`、`GET /api/audiences`、`PATCH /api/audiences/{id}/review` |
 | ⑤ | 提升度与预算分配（算法 B） | 名单与提升度 `#/audiences` | `lift_service`、`audience_service` / `campaign_controller` | `GET /api/campaigns`、`POST /api/campaigns`、`GET /api/campaigns/{id}/allocation` |
-| ⑥ | 导出与审计 | 导出与审计 `#/exports` | `export_service`、`audit_service` / `export_controller` | `GET /api/exports/{members,segments,audiences}.csv`、`GET /api/audit` |
+| ⑥ | 导出与审计 | 导出与审计 `#/exports` | `export_service`、`audit_service` / `export_controller` | `GET /api/exports/{members,segments,audiences,merge-records}.csv`、`GET /api/audit` |
+| ⑦ | 跨渠道会员归并 | 跨渠道归并 `#/merge` | `merge_engine`、`merge_service`、`snapshot_service` / `merge_controller` | `POST /api/merge/jobs`、`POST /api/merge/jobs/{id}/retry`、`GET /api/merge/{overview,jobs,records,masters/{member_id}}` |
 
 横切能力（不计入业务模块）：JWT + 三角色 RBAC、限流（Redis 固定窗口，写接口单独额度）、审计中间件、worker 心跳。
 登录页与总览是横切入口，也不算业务模块。
+
+### 跨渠道会员归并口径（模块 ⑦）
+
+1. **识别同一人**：规范化手机号（去空格/连字符）相同，或外部账号（`external_type + external_id`）相同；
+   并查集求传递闭包，三渠道档案可经不同链路连通；无有效标识的档案不会误并（`merge_engine.resolve_groups`）。
+2. **主档选择（确定性）**：关联订单量降序 → 最早入会 → 档案 id 升序；主档稳定化保证只有一层，不出现链式归并。
+3. **冲突资料保留来源与时间依据**：姓名/城市/等级/手机号/外部账号按来源资料时间 `source_updated_at` 最新者胜，
+   同时间按渠道优先级（小程序 > 门店 > 外卖）；每条冲突保留全部来源、渠道与时间戳（`merge_records.conflicts`）。
+4. **合并订单与历史券响应**：订单、券响应事实的 `member_id` 整体改挂主档后重算主档窗口指标、客单价与券响应率；不物理删除任何档案。
+5. **任务可续跑且幂等**：任务状态 `pending → running → completed/failed`；按批（默认 500）处理、批末推进 `last_cursor`
+   并提交，失败从游标之后续跑；归并记录按 `(job_id, merged_profile_id)` 去重，重试/重复任务不新增重复档案。
+6. **名单导出依据**：名单生成时冻结会员快照 `audience_snapshots`——**已确认/已推送名单始终按生成时快照导出**，
+   **待确认名单改用归并后的主档**（`merged_into_id IS NULL`），避免对同一人重复触达。
+7. **可核对**：页面与 `merge-records.csv` 都能核对主档、被合并档案、识别/冲突依据与归并前后人数。
+
 
 ## 4. 快速启动
 
@@ -145,15 +161,20 @@ docker-compose.yml  .env  README.md
 
 ### seed 数量口径（`SEED_SUMMARY`）
 
-`SEED_SUMMARY brand=rfmseg users=3 sources=8000 runs=30000 findings=8 pending=2`
+`SEED_SUMMARY brand=rfmseg users=3 sources=10290 runs=30000 findings=8 pending=2 profiles=10290 dup_members=2290 coupons=15547`
 
 | 键 | 含义 |
 |---|---|
 | `users` | 3 个演示账号 |
-| `sources` | 会员数（8,000，32 万会员的 1/40 抽样） |
-| `runs` | 订单数（30,000） |
+| `sources` | 归并前会员行数（8,000 自然人 + 2,290 重复渠道档案 = 10,290；发起一次归并后主档回到 8,000） |
+| `runs` | 订单数（30,000，重复档案改挂不改总数） |
 | `findings` | RFM 分群数（8） |
-| `pending` | 待确认名单数（2，对应 2 个活动） |
+| `pending` | 待确认名单数（2，对应 2 个进行中活动；另有 1 份已确认名单演示快照导出） |
+| `profiles` | 归并前渠道档案总数（10,290，含 2,290 份跨渠道重复档案） |
+| `dup_members` | 追加的重复渠道会员行数（2,290） |
+| `coupons` | 历史券响应（发券/核销）事实条数（15,547），归并时随主档合并 |
+
+> seed 只造数、不自动归并；首次进入「跨渠道归并」发起任务后，`10290 → 8000` 个主档（自然人）。
 
 ## 11. 共享枚举出现位置
 
@@ -166,6 +187,10 @@ docker-compose.yml  .env  README.md
 | 名单状态 `pending/confirmed/pushed` | `backend/src/constants/enums.py` → `AudienceStatus` | `frontend/site/js/config.js` → `ENUMS.audienceStatus` |
 | 订单渠道 `miniapp/store/delivery` | `backend/src/constants/enums.py` → `OrderChannel` | `frontend/site/js/config.js` → `ENUMS.channel` |
 | 分配状态 `allocated/deferred/ineligible` | `backend/src/services/lift_service.py` | `frontend/site/js/config.js` → `ENUMS.allocationStatus` |
+| 归并任务状态 `pending/running/completed/failed` | `enums.py` → `MergeJobStatus/MERGE_JOB_STATUS_LABELS` | `config.js` → `ENUMS.mergeJobStatus` |
+| 归并识别依据 `phone/external` | `enums.py` → `IdentityKind/IDENTITY_KIND_LABELS` | `config.js` → `ENUMS.matchKind` |
+| 渠道档案渠道 / 状态 `store/miniapp/delivery`、`active/merged` | `enums.py` → `ProfileChannel/ProfileStatus` | `config.js` → `ENUMS.profileChannel/profileStatus` |
+| 归并权限点 `merge:read / merge:run` | `backend/src/constants/roles.py` | `frontend/site/js/config.js` → `PERMISSIONS` |
 
 ## 12. Docker 说明
 

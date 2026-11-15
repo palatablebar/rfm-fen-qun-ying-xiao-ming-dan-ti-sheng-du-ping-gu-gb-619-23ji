@@ -19,22 +19,33 @@ from sqlalchemy import func, insert, select
 
 from src.config.database import session_scope
 from src.models.audit import AuditLog
+from src.models.audience import Audience
 from src.models.campaign import Campaign
+from src.models.channel_profile import ChannelProfile
+from src.models.coupon_response import CouponResponse
 from src.models.member import Member
 from src.models.order import Order
 from src.models.segment import Segment
 from src.models.user import User
-from src.services import audience_service, segment_service
+from src.services import audience_service, segment_service, snapshot_service
+from src.services.merge_engine import normalize_phone
 from src.constants.limits import RFM_WINDOW_DAYS
 from src.utils.security import hash_password
+from src.utils.timeutil import utcnow
 
 from scripts.demo_config import (
     ARCHETYPES,
     CAMPAIGNS,
     CHANNELS,
     CITIES,
+    CONFIRMED_CAMPAIGN,
+    COUPON_PER_PROFILE,
     DEMO_PASSWORD,
     DEMO_USERS,
+    DUPLICATE_ONE_RATE,
+    DUPLICATE_TWO_RATE,
+    EXTERNAL_MATCH_SHARE,
+    EXTERNAL_TYPES,
     GIVEN,
     MEMBER_TARGET,
     ORDER_TARGET,
@@ -42,6 +53,8 @@ from scripts.demo_config import (
     RANDOM_SEED,
     SEED_ANCHOR,
     SEED_AUDIENCES,
+    SEED_CAMPAIGN_CODES,
+    SEED_CONFIRMED_AUDIENCE,
     SEGMENT_COUPON,
     STORES,
     SURNAMES,
@@ -276,6 +289,232 @@ def ensure_audiences(db) -> int:
     return db.scalar(select(func.count()).select_from(Audience)) or 0
 
 
+def ensure_channel_world(db) -> dict:
+    """构造跨渠道档案世界（幂等）：
+
+    - 每个原始会员一份与主数据一致的渠道档案（门店/小程序/外卖按其订单渠道选主）；
+    - 给部分会员追加 1~2 份重复档案，落到新的 member 行，并把该会员对应渠道的部分
+      订单改挂过去，模拟「同一人三个渠道各留一份、订单被拆散」；
+    - 每个渠道档案挂 0~3 条历史券响应（发券/核销事实）。
+    已存在 channel_profiles 时整体跳过，保证重复 seed 不新增重复档案。
+    """
+    if db.scalar(select(func.count()).select_from(ChannelProfile)):
+        return {
+            "profiles": db.scalar(select(func.count()).select_from(ChannelProfile)) or 0,
+            "duplicate_members": db.scalar(
+                select(func.count()).select_from(Member).where(Member.merged_into_id.is_not(None))
+            ) or 0,
+            "coupons": db.scalar(select(func.count()).select_from(CouponResponse)) or 0,
+        }
+
+    rng = random.Random(RANDOM_SEED + 7)
+    members = db.scalars(select(Member).order_by(Member.id)).all()
+    # 会员 id -> 其订单的主导渠道
+    member_channel: dict[int, str] = {}
+    for member in members:
+        rows = db.execute(
+            select(Order.channel, func.count())
+            .where(Order.member_id == member.id)
+            .group_by(Order.channel)
+            .order_by(func.count().desc())
+        ).all()
+        member_channel[member.id] = rows[0][0] if rows else rng.choice([c for c, _ in CHANNELS])
+
+    profile_id_seq = 0
+    duplicate_member_count = 0
+    # 外部账号全局唯一，避免不同自然人的档案因外部 id 撞号被误并
+    used_externals: set[tuple[str, str]] = set()
+    dup_member_seq = 0
+
+    def next_member_no() -> str:
+        nonlocal dup_member_seq
+        dup_member_seq += 1
+        return f"MYX{dup_member_seq:05d}"
+
+    for member in members:
+        base_channel = member_channel[member.id]
+        extra_channels = [c for c in ("store", "miniapp", "delivery") if c != base_channel]
+        roll = rng.random()
+        dup_count = 2 if roll < DUPLICATE_TWO_RATE else (1 if roll < DUPLICATE_TWO_RATE + DUPLICATE_ONE_RATE else 0)
+        chosen_dups = rng.sample(extra_channels, dup_count) if dup_count else []
+
+        # 1) 原始会员的基线档案
+        profile_id_seq += 1
+        external_type, external_id = _maybe_external(rng, base_channel, member.id, used_externals)
+        base_updated = datetime.combine(member.joined_on, time(10, 0)) if member.joined_on else utcnow()
+        base_profile = ChannelProfile(
+            id=profile_id_seq,
+            member_id=member.id,
+            channel=base_channel,
+            channel_member_no=f"{base_channel.upper()}-{member.member_no}",
+            name=member.name,
+            phone=member.phone,
+            phone_norm=normalize_phone(member.phone),
+            external_type=external_type,
+            external_id=external_id,
+            city=member.city,
+            tier=member.tier,
+            status="active",
+            source_updated_at=base_updated,
+        )
+        db.add(base_profile)
+
+        # 2) 重复档案：新 member 行 + 部分订单改挂 + 资料冲突
+        for dup_channel in chosen_dups:
+            # 外部账号桥接（手机号可能不同）或同手机号，二者都保证可识别为同一人
+            use_external_bridge = rng.random() < EXTERNAL_MATCH_SHARE
+            if use_external_bridge:
+                etype = rng.choice(EXTERNAL_TYPES)
+                eid = f"{etype}-{member.id:05d}"
+                # 同一自然人的桥接账号唯一；万一撞号则换类型直到不撞
+                while (etype, eid) in used_externals:
+                    etype = rng.choice(EXTERNAL_TYPES)
+                    eid = f"{etype}-{member.id:05d}-{dup_channel}"
+                used_externals.add((etype, eid))
+                dup_phone = _maybe_wrong_phone(member.phone)
+                # 基线档案补上同一外部账号，桥接才闭合
+                base_profile.external_type, base_profile.external_id = etype, eid
+            else:
+                etype, eid = None, None
+                dup_phone = member.phone
+            new_member = Member(
+                member_no=next_member_no(),
+                name=_maybe_conflict_name(rng, member.name),
+                phone=dup_phone,
+                city=rng.choice(CITIES) if rng.random() < 0.4 else member.city,
+                tier=member.tier,
+                joined_on=member.joined_on,
+                purchase_rate=member.purchase_rate,
+                avg_ticket=member.avg_ticket,
+            )
+            db.add(new_member)
+            db.flush()
+            duplicate_member_count += 1
+
+            # 该渠道约 40% 的订单改挂到重复会员（订单总数不变，只是被渠道拆散）
+            dup_orders = db.scalars(
+                select(Order).where(Order.member_id == member.id).where(Order.channel == dup_channel)
+            ).all()
+            move = dup_orders[: max(1, int(len(dup_orders) * 0.4))]
+            for order in move:
+                order.member_id = new_member.id
+
+            profile_id_seq += 1
+            db.add(
+                ChannelProfile(
+                    id=profile_id_seq,
+                    member_id=new_member.id,
+                    channel=dup_channel,
+                    channel_member_no=f"{dup_channel.upper()}-{new_member.member_no}",
+                    name=new_member.name,
+                    phone=dup_phone,
+                    phone_norm=normalize_phone(dup_phone),
+                    external_type=etype,
+                    external_id=eid,
+                    city=new_member.city,
+                    tier=new_member.tier,
+                    status="active",
+                    source_updated_at=datetime.combine(member.joined_on, time(rng.randint(8, 20), rng.randint(0, 59))),
+                )
+            )
+    db.flush()
+
+    # 3) 每个渠道档案挂历史券响应
+    profiles = db.scalars(select(ChannelProfile).order_by(ChannelProfile.id)).all()
+    coupon_seq = 0
+    for profile in profiles:
+        count = rng.choice(COUPON_PER_PROFILE)
+        for idx in range(count):
+            coupon_seq += 1
+            sent_days = rng.randint(20, 480)
+            sent_at = datetime.combine(SEED_ANCHOR - timedelta(days=sent_days), time(rng.randint(9, 20), rng.randint(0, 59)))
+            redeemed = rng.random() < 0.35
+            db.add(
+                CouponResponse(
+                    member_id=profile.member_id,
+                    campaign_code=rng.choice(SEED_CAMPAIGN_CODES),
+                    coupon_name=rng.choice(["满减券", "买一赠一券", "新客尝鲜券", "会员日折扣券"]),
+                    channel=profile.channel,
+                    status="redeemed" if redeemed else "sent",
+                    face_value=float(rng.choice([4, 5, 6, 8, 10, 12])),
+                    sent_at=sent_at,
+                    redeemed_at=sent_at + timedelta(days=rng.randint(1, 14)) if redeemed else None,
+                )
+            )
+    db.flush()
+    return {
+        "profiles": len(profiles),
+        "duplicate_members": duplicate_member_count,
+        "coupons": coupon_seq,
+    }
+
+
+def _maybe_external(
+    rng: random.Random, channel: str, member_id: int, used: set[tuple[str, str]]
+) -> tuple[str | None, str | None]:
+    if rng.random() < 0.5:
+        etype = rng.choice(EXTERNAL_TYPES)
+        eid = f"{etype}-{member_id:05d}"
+        # 撞号则追加随机后缀，保证外部账号全局唯一
+        while (etype, eid) in used:
+            eid = f"{etype}-{member_id:05d}-{rng.randint(1000, 9999)}"
+        used.add((etype, eid))
+        return etype, eid
+    return None, None
+
+
+def _maybe_conflict_name(rng: random.Random, name: str) -> str:
+    if rng.random() < 0.5:
+        return rng.choice(SURNAMES) + rng.choice(GIVEN)
+    return name
+
+
+def _maybe_wrong_phone(phone: str) -> str:
+    # 外部账号桥接场景下档案手机号可能不同（留空或渠道虚拟号）
+    return "" if len(phone) < 7 else phone[:-4] + "0000"
+
+
+def ensure_confirmed_audience(db) -> None:
+    """补一个已结束活动 + 已确认名单，并冻结其会员快照（演示已确认名单按快照导出）。"""
+    campaign = db.scalar(select(Campaign).where(Campaign.code == CONFIRMED_CAMPAIGN["code"]))
+    if campaign is None:
+        campaign = audience_service.create_campaign(
+            db,
+            {
+                "code": CONFIRMED_CAMPAIGN["code"],
+                "name": CONFIRMED_CAMPAIGN["name"],
+                "channel": CONFIRMED_CAMPAIGN["channel"],
+                "budget": CONFIRMED_CAMPAIGN["budget"],
+                "status": CONFIRMED_CAMPAIGN["status"],
+                "starts_on": CONFIRMED_CAMPAIGN["starts_on"],
+                "ends_on": CONFIRMED_CAMPAIGN["ends_on"],
+                "note": CONFIRMED_CAMPAIGN["note"],
+            },
+            operator_email="seed@rfmseg.io",
+            seed_key=CONFIRMED_CAMPAIGN["seed_key"],
+        )
+        db.flush()
+    seed_key, _campaign_code, note = SEED_CONFIRMED_AUDIENCE
+    audience = db.scalar(select(Audience).where(Audience.seed_key == seed_key))
+    if audience is None:
+        audience = audience_service.generate(
+            db,
+            campaign=campaign,
+            budget=None,
+            operator_email="seed@rfmseg.io",
+            note=note,
+            seed_key=seed_key,
+        )
+        db.flush()
+    if not snapshot_service.has_snapshot(db, audience.id):
+        snapshot_service.snapshot_audience_members(db, audience)
+    if audience.status == "pending":
+        audience_service.confirm(
+            db, audience, status="confirmed", note="seed 已确认：按生成时快照导出", actor="seed@rfmseg.io"
+        )
+    db.flush()
+
+
 def ensure_audit(db) -> None:
     seeds = [
         ("seed-audit-1", "admin@rfmseg.io", "admin", "segment.recompute", "segment", {"weights": [0.3, 0.3, 0.4]}),
@@ -307,12 +546,19 @@ def seed_all() -> dict:
         segments = ensure_segments(db)
         ensure_campaigns(db)
         ensure_audiences(db)
+        channel_world = ensure_channel_world(db)
+        ensure_confirmed_audience(db)
         ensure_audit(db)
         audiences = db.scalar(select(func.count()).select_from(Audience)) or 0
         pending = db.scalar(select(func.count()).select_from(Audience).where(Audience.status == "pending")) or 0
+        natural_persons = db.scalar(
+            select(func.count()).select_from(Member).where(Member.merged_into_id.is_(None))
+        ) or 0
         summary = (
-            f"SEED_SUMMARY brand=rfmseg users={users} sources={members} "
-            f"runs={orders} findings={segments} pending={pending}"
+            f"SEED_SUMMARY brand=rfmseg users={users} sources={natural_persons} "
+            f"runs={orders} findings={segments} pending={pending} "
+            f"profiles={channel_world['profiles']} dup_members={channel_world['duplicate_members']} "
+            f"coupons={channel_world['coupons']}"
         )
         print(summary, flush=True)
         return {
@@ -322,6 +568,10 @@ def seed_all() -> dict:
             "segments": segments,
             "audiences": audiences,
             "pending": pending,
+            "profiles": channel_world["profiles"],
+            "dup_members": channel_world["duplicate_members"],
+            "coupons": channel_world["coupons"],
+            "natural_persons": natural_persons,
         }
 
 

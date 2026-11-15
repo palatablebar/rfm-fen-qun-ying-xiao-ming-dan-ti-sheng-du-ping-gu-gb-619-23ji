@@ -84,6 +84,28 @@ export const overviewPage = {
         { label: '后台任务', value: data.worker_alive ? '在岗' : '心跳超时', hint: 'Celery 每日重算' },
       ])}
 
+      ${
+        data.merge && data.merge.profiles_total
+          ? `<section class="panel">
+              <div class="panel-head">
+                <h2>跨渠道归并</h2>
+                <span class="meta">${data.merge.latest_job_no ? `最近任务 ${esc(data.merge.latest_job_no)} · ${esc(ENUMS.mergeJobStatus[data.merge.latest_job_status] || data.merge.latest_job_status || '—')}` : '尚未发起归并'}</span>
+              </div>
+              <div class="panel-body">
+                ${statStrip([
+                  { label: '渠道档案总数', value: fmtNum(data.merge.profiles_total), hint: '门店 + 小程序 + 外卖' },
+                  { label: '归并后主档（真实人数）', value: fmtNum(data.merge.master_members), hint: '去重后唯一自然人' },
+                  { label: '被合并档案', value: fmtNum(data.merge.merged_members), hint: '订单与券响应已并入主档' },
+                  { label: '去重减少', value: fmtNum(data.merge.profiles_total - data.merge.master_members), hint: '消除的重复触达对象' },
+                ])}
+                <div class="note" style="margin-top:10px">
+                  已确认名单按生成时会员快照导出，待确认名单改用归并后主档；详见「跨渠道归并」页。
+                </div>
+              </div>
+            </section>`
+          : ''
+      }
+
       <section class="panel">
         <div class="panel-head">
           <h2>八类 RFM 分群</h2>

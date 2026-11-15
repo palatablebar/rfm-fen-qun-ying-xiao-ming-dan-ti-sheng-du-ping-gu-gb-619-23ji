@@ -38,6 +38,24 @@ def overview(db: Session) -> dict:
     orders_total = db.scalar(select(func.count()).select_from(Order)) or 0
     gmv_total = db.scalar(select(func.sum(Order.amount))) or 0.0
 
+    # 跨渠道归并口径：主档数（去重后的真实人数）与被合并档案数
+    master_members = db.scalar(
+        select(func.count()).select_from(Member).where(Member.merged_into_id.is_(None))
+    ) or 0
+    merged_members = members_total - master_members
+    try:
+        from src.models.channel_profile import ChannelProfile
+        from src.models.merge_job import MergeJob
+
+        profiles_total = db.scalar(select(func.count()).select_from(ChannelProfile)) or 0
+        profiles_merged = db.scalar(
+            select(func.count()).select_from(ChannelProfile).where(ChannelProfile.status == "merged")
+        ) or 0
+        latest_merge_job = db.scalar(select(MergeJob).order_by(MergeJob.id.desc()).limit(1))
+    except Exception:  # noqa: BLE001 - 表尚未建时兜底
+        profiles_total = profiles_merged = 0
+        latest_merge_job = None
+
     segment_rows = db.scalars(select(Segment).order_by(Segment.sort_order)).all()
     segments = [
         {
@@ -135,4 +153,12 @@ def overview(db: Session) -> dict:
         "as_of": as_of,
         "trend": trend,
         "worker_alive": worker_alive(),
+        "merge": {
+            "profiles_total": profiles_total,
+            "profiles_merged": profiles_merged,
+            "master_members": master_members,
+            "merged_members": merged_members,
+            "latest_job_status": latest_merge_job.status if latest_merge_job else None,
+            "latest_job_no": latest_merge_job.job_no if latest_merge_job else None,
+        },
     }

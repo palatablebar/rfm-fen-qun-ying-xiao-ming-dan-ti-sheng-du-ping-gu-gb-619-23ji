@@ -25,6 +25,8 @@ class MemberOut(BaseModel):
     purchase_rate: float
     avg_ticket: float
     phone_masked: bool
+    merged_into_id: int | None
+    is_master: bool
 
 
 class OrderOut(BaseModel):

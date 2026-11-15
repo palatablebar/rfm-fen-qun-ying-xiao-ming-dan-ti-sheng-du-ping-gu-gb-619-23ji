@@ -97,6 +97,7 @@ function openAudience(view, ctx, audience, campaigns) {
       ['增量 GMV', fmtMoney(audience.inc_gmv)],
       ['整体 ROI', `<b>${Number(audience.roi).toFixed(2)}</b>`],
       ['大盘购买率', fmtPct(audience.global_rate)],
+      ['导出依据', `<b>${esc(audience.export_basis_label || '—')}</b>`],
       ['生成人 / 时间', `${esc(audience.operator_email)} · ${esc((audience.created_at || '').slice(0, 16).replace('T', ' '))}`],
       ['确认人', esc(audience.confirmed_by || '—')],
     ])}

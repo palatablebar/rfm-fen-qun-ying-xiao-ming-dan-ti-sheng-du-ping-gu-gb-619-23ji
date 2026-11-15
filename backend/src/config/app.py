@@ -20,9 +20,11 @@ logger = logging.getLogger(f"{settings.app_name}.app")
 
 def _bootstrap_database() -> None:
     from src.models import Base  # noqa: WPS433 - 延迟导入避免循环
+    from src.config.schema_migration import ensure_columns
 
     wait_for_db()
     Base.metadata.create_all(bind=engine)
+    ensure_columns()
 
 
 def _run_seed_once() -> None:

@@ -35,7 +35,14 @@ const EXPORTS = [
     path: '/api/exports/audiences.csv',
     filename: 'audience.csv',
     title: '名单明细（推券平台用）',
-    hint: '按名单的分群配额展开到会员级，带该群 lift / 预算 / 预计增量，便于回算',
+    hint: '已确认名单按生成时会员快照；待确认名单按归并后主档，避免重复触达',
+  },
+  {
+    id: 'merge',
+    path: '/api/exports/merge-records.csv',
+    filename: 'merge_records.csv',
+    title: '跨渠道归并结果',
+    hint: '每个被合并档案一行：主档/被合并档案、识别依据、冲突来源与时间、归并前后人数',
   },
 ];
 

@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.db_kind == "sqlite":
+            # 仅供本地/CI 测试：内存或文件 SQLite
+            return "sqlite:///:memory:"
         if self.db_kind == "mysql":
             return (
                 f"mysql+pymysql://{self.db_user}:{self.db_password}"

@@ -21,3 +21,8 @@ DEFAULT_ORDERS_PER_CONVERTER = 1.4   # 每个增量转化会员在活动窗口�
 DEFAULT_CORE_SHARE = 0.6             # 分群内「高响应核心盘」占比
 DEFAULT_TAIL_FACTOR = 0.6            # 超出核心盘部分的边际折减系数
 LIFT_ELIGIBLE_MIN = 1.0              # lift ≤ 1 不投放
+
+# ---- 跨渠道会员归并 ----
+MERGE_BATCH_SIZE = 500               # 每批处理的渠道档案数，断点游标按批推进
+NORMALIZE_PHONE_MIN_LEN = 7          # 视为有效手机号的最小长度
+EXTERNAL_ID_MIN_LEN = 2              # 视为有效外部账号的最小长度

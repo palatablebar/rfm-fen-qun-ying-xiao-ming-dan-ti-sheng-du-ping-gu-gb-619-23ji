@@ -92,3 +92,28 @@ SEED_AUDIENCES = [
     ("seed-audience-autumn", "autumn-member-day", "init 抽样名单：预算受限，按 lift/成本 贪心选群"),
     ("seed-audience-double11", "double11-warmup", "init 抽样名单：预算充足，覆盖全部可投分群"),
 ]
+
+# ---- 跨渠道归并演示数据 ----
+# 同一顾客在门店 / 小程序 / 外卖各留一份档案：给一部分会员追加 1~2 份重复渠道档案。
+DUPLICATE_ONE_RATE = 0.19          # 19% 会员追加 1 份重复档案（双档案）
+DUPLICATE_TWO_RATE = 0.05          # 5% 会员再追加 1 份（三档案，覆盖三个渠道）
+EXTERNAL_MATCH_SHARE = 0.30        # 重复档案中 30% 用外部账号桥接（其余用手机号）
+EXTERNAL_TYPES = ["wx_openid", "alipay_uid", "delivery_uid"]
+COUPON_PER_PROFILE = (0, 1, 2, 3)  # 每个渠道档案的历史券响应条数权重
+SEED_CAMPAIGN_CODES = ["autumn-member-day", "double11-warmup", "summer-tea-fest"]
+CONFIRMED_CAMPAIGN = {
+    "seed_key": "seed-campaign-summer",
+    "code": "summer-tea-fest",
+    "name": "夏日茶歇回访券",
+    "channel": "门店企微群",
+    "budget": 1800.0,
+    "status": "closed",
+    "starts_on": "2026-08-04",
+    "ends_on": "2026-08-18",
+    "note": "已结束活动，其名单已确认并冻结会员快照，用于演示「已确认名单按生成时快照导出」。",
+}
+SEED_CONFIRMED_AUDIENCE = (
+    "seed-audience-summer",
+    "summer-tea-fest",
+    "init 已确认名单：导出按生成时会员快照，不随后续归并变化",
+)

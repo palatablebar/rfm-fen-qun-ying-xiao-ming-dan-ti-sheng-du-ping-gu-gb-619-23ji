@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, Index, Integer, String
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models import Base
@@ -38,6 +38,13 @@ class Member(Base):
     composite_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     segment_code: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     scored_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # ---- 跨渠道归并 ----
+    # 被归并档案指向主档 member.id；主档与未归并档案为 NULL。不物理删除，保留可追溯。
+    merged_into_id: Mapped[int | None] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

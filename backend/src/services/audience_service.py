@@ -146,10 +146,16 @@ def generate(
     )
     db.add(audience)
     db.flush()
+    # 生成即冻结会员快照：已确认名单后续按快照导出，不受归并影响
+    from src.services import snapshot_service
+
+    snapshot_service.snapshot_audience_members(db, audience)
     return audience
 
 
 def serialize_audience(audience: Audience, campaign: Campaign | None = None) -> dict:
+    # 已确认/已推送：按生成时会员快照导出；待确认：改用归并后的主档
+    frozen = audience.status in {"confirmed", "pushed"}
     return {
         "id": audience.id,
         "audience_no": audience.audience_no,
@@ -158,6 +164,8 @@ def serialize_audience(audience: Audience, campaign: Campaign | None = None) -> 
         "campaign_code": campaign.code if campaign else None,
         "status": audience.status,
         "status_label": AUDIENCE_STATUS_LABELS.get(audience.status, audience.status),
+        "export_basis": "snapshot" if frozen else "master",
+        "export_basis_label": "生成时会员快照（已冻结）" if frozen else "归并后会员主档",
         "budget": round(audience.budget or 0.0, 2),
         "budget_remaining": round((audience.budget or 0.0) - (audience.spend or 0.0), 2),
         "member_count": audience.member_count,
